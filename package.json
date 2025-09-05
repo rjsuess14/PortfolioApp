@@ -1,0 +1,16 @@
+{
+	"name": "portfolio-app",
+	"private": true,
+	"scripts": {
+		"dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+		"dev:frontend": "cd frontend && npm run dev",
+		"dev:backend": "cd backend && uv run python dev.py",
+		"build": "cd frontend && npm run build",
+		"install:all": "cd frontend && npm install && cd ../backend && uv sync",
+		"lint": "cd frontend && npm run lint",
+		"format": "cd frontend && npm run format"
+	},
+	"devDependencies": {
+		"concurrently": "^8.2.2"
+	}
+}
