@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid import UUID
 from supabase import create_client, Client
 from ..core.config import get_settings
@@ -6,11 +6,16 @@ from ..core.config import get_settings
 settings = get_settings()
 
 class PortfolioService:
-    def __init__(self):
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
-        )
+    def __init__(self, supabase_client: Optional[Client] = None):
+        # Allow injection of a user-authenticated Supabase client so that
+        # RLS policies using auth.uid() pass during selects/inserts.
+        if supabase_client is not None:
+            self.supabase: Client = supabase_client
+        else:
+            self.supabase: Client = create_client(
+                settings.SUPABASE_URL,
+                settings.SUPABASE_ANON_KEY
+            )
     
     async def get_user_portfolio(self, user_id: str) -> List[Dict[str, Any]]:
         # Fetch user's portfolio accounts with holdings

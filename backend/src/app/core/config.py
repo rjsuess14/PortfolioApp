@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # CORS
-    ALLOWED_HOSTS: List[str] = ["http://localhost:5173", "http://localhost:3000", "*"]
+    ALLOWED_HOSTS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
     # Supabase
     SUPABASE_URL: str

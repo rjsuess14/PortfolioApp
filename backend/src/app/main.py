@@ -20,12 +20,6 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
-# Security headers middleware (first)
-app.add_middleware(SecurityHeadersMiddleware)
-
-# Rate limiting middleware
-app.add_middleware(RateLimitMiddleware, max_requests=100, window_seconds=60)
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -35,11 +29,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security middleware
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=settings.ALLOWED_HOSTS
-)
+# Security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiting middleware
+app.add_middleware(RateLimitMiddleware, max_requests=100, window_seconds=60)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

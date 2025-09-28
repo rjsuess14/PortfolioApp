@@ -1,0 +1,334 @@
+name: Plaid Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/src/app/services/plaid_service.py'
+      - 'backend/src/app/api/v1/plaid.py'
+      - 'backend/tests/test_plaid*.py'
+      - 'frontend/tests/**/*plaid*'
+      - '.github/workflows/test-plaid.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/src/app/services/plaid_service.py'
+      - 'backend/src/app/api/v1/plaid.py'
+      - 'backend/tests/test_plaid*.py'
+      - 'frontend/tests/**/*plaid*'
+
+env:
+  # Plaid sandbox credentials (safe for public repos)
+  PLAID_CLIENT_ID: ${{ secrets.PLAID_SANDBOX_CLIENT_ID || '6171e7e7b4614e001313316e' }}
+  PLAID_SECRET: ${{ secrets.PLAID_SANDBOX_SECRET || 'sandbox_abc123' }}
+  PLAID_ENV: sandbox
+  
+  # Test database
+  DATABASE_URL: sqlite:///./test.db
+  
+  # Auth settings for tests
+  JWT_SECRET: test-jwt-secret-for-ci
+  SUPABASE_URL: https://test.supabase.co
+  SUPABASE_ANON_KEY: test-anon-key
+
+jobs:
+  backend-tests:
+    name: Backend Plaid Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        working-directory: ./backend
+        run: |
+          uv sync --dev
+      
+      - name: Run Plaid service tests
+        working-directory: ./backend
+        run: |
+          uv run pytest tests/test_plaid_service.py -v --cov=src.app.services.plaid_service --cov-report=xml
+      
+      - name: Run Plaid API tests
+        working-directory: ./backend
+        run: |
+          uv run pytest tests/test_plaid_api.py -v --cov=src.app.api.v1.plaid --cov-report=xml
+      
+      - name: Run Plaid security tests
+        working-directory: ./backend
+        run: |
+          uv run pytest tests/test_plaid_security.py -v
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./backend/coverage.xml
+          flags: backend-plaid
+          name: backend-plaid-${{ matrix.python-version }}
+
+  frontend-tests:
+    name: Frontend Plaid Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: ["18", "20"]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: ./frontend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+      
+      - name: Install Playwright browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+      
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+      
+      - name: Run unit tests
+        working-directory: ./frontend
+        run: npm run test:unit
+      
+      - name: Run Playwright tests
+        working-directory: ./frontend
+        run: npm run test
+        env:
+          CI: true
+      
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ matrix.node-version }}
+          path: frontend/playwright-report/
+          retention-days: 30
+
+  integration-tests:
+    name: End-to-End Integration Tests
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_portfolio
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: ./frontend/package-lock.json
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+      
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: uv sync --dev
+      
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+      
+      - name: Install Playwright browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+      
+      - name: Start backend server
+        working-directory: ./backend
+        run: |
+          uv run uvicorn src.app.main:app --host 0.0.0.0 --port 8001 &
+          echo $! > backend.pid
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_portfolio
+      
+      - name: Wait for backend
+        run: |
+          timeout 30 bash -c 'until curl -f http://localhost:8001/health; do sleep 1; done'
+      
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+      
+      - name: Run integration tests
+        working-directory: ./frontend
+        run: npm run test:integration
+        env:
+          PUBLIC_API_BASE_URL: http://localhost:8001
+      
+      - name: Stop backend server
+        if: always()
+        run: |
+          if [ -f backend.pid ]; then
+            kill $(cat backend.pid) || true
+            rm backend.pid
+          fi
+      
+      - name: Upload integration test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Bandit security linter
+        uses: tj-actions/bandit@v5.1
+        with:
+          options: "-r backend/src -f json -o bandit-report.json"
+          
+      - name: Run Safety check for Python dependencies
+        working-directory: ./backend
+        run: |
+          pip install safety
+          safety check --json --output safety-report.json || true
+      
+      - name: Run npm audit for Node.js dependencies
+        working-directory: ./frontend
+        run: |
+          npm audit --audit-level moderate --json > npm-audit-report.json || true
+      
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            backend/safety-report.json
+            frontend/npm-audit-report.json
+          retention-days: 30
+
+  test-coverage:
+    name: Test Coverage Report
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+      
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: uv sync --dev
+      
+      - name: Run all backend tests with coverage
+        working-directory: ./backend
+        run: |
+          uv run pytest tests/test_plaid*.py --cov=src.app --cov-report=html --cov-report=xml --cov-report=term
+      
+      - name: Generate coverage badge
+        run: |
+          pip install coverage-badge
+          coverage-badge -f -o coverage.svg
+      
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            backend/htmlcov/
+            backend/coverage.xml
+            coverage.svg
+          retention-days: 30
+
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+      
+      - name: Install dependencies
+        working-directory: ./backend
+        run: uv sync --dev
+      
+      - name: Run performance tests
+        working-directory: ./backend
+        run: |
+          uv run pytest tests/test_plaid_service.py::TestPlaidServicePerformance -v
+      
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+      
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.12.x
+      
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+      
+      - name: Run Lighthouse CI
+        working-directory: ./frontend
+        run: |
+          npm run preview &
+          sleep 10
+          lhci autorun --upload.target=temporary-public-storage
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
