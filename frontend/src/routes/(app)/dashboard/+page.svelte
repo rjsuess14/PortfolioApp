@@ -35,8 +35,8 @@
 		const handleViewDetails = (event: Event) => {
 			const customEvent = event as CustomEvent;
 			const { accountId } = customEvent.detail;
-			// Navigate to account detail page (if it exists)
-			console.log('View account details:', accountId);
+			// Navigate to the new account detail page
+			window.location.href = `/accounts/${accountId}`;
 		};
 		
 		const handleRefreshAccount = (event: Event) => {
